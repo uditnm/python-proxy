@@ -22,6 +22,37 @@ def make_upstream_call(host, port, data, client):
     except Exception as e:
         print(f"Upstream error: {e}")
 
+def handle_upstream_tunnel(upstream_socket, client_socket):
+    client_thread = threading.Thread(target=data_loop, args=(client_socket, upstream_socket))
+    upstream_thread = threading.Thread(target=data_loop, args=(upstream_socket, client_socket))
+
+    client_thread.start()
+    upstream_thread.start()
+
+    client_thread.join()
+    upstream_thread.join()
+
+def data_loop(socket1, socket2):
+    try:
+        while True:
+            received_data = socket1.recv(4096)
+            if not received_data:
+                break
+
+            socket2.sendall(received_data)
+                
+    except socket.timeout:
+        pass  # This is a normal timeout, we can just exit the loop
+
+    except OSError as e:
+        if e.errno == 10053:
+        # This is a normal client disconnect during teardown
+            pass
+        else:
+            print(f"Upstream error: {e}")
+                
+    except Exception as e:
+        print(f"Upstream error: {e}")
 
 def handle_client(client, addr):
     with client:
@@ -36,24 +67,45 @@ def handle_client(client, addr):
             data = received_data.decode()
             print(f"Received data from client: {data}")
 
-            split = data.split()
-            url = split[1]
-            print(f"url: {url}")
+            split_data = data.split()
 
-            parsed = urlsplit(url)
+            # HTTPS
+            if split_data[0] == "CONNECT":
+                host_addr = split_data[1].split(':')
 
-            host = parsed.hostname
-            print(f"host: {host}")
+                host = host_addr[0]
+                print(f"host: {host}")
 
-            dest_port = parsed.port
-            if dest_port is None:
-                if parsed.scheme == "http":
-                    dest_port = 80
-                if parsed.scheme == "https":
-                    dest_port = 443
-            print(f"destination port: {dest_port}")
+                dest_port = int(host_addr[1])
+                print(f"destination port: {dest_port}")
+                
+                break
+            # HTTP
+            else:
+                url = split_data[1]
+                print(f"url: {url}")
 
-            make_upstream_call(host, dest_port, received_data, client)
+                parsed = urlsplit(url)
+
+                host = parsed.hostname
+                print(f"host: {host}")
+
+                dest_port = parsed.port
+                if dest_port is None:
+                    if parsed.scheme == "http":
+                        dest_port = 80
+                    if parsed.scheme == "https":
+                        dest_port = 443
+                print(f"destination port: {dest_port}")
+
+                make_upstream_call(host, dest_port, received_data, client)
+                pass
+
+        #handle CONNECT method for HTTPS
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as upstream_socket:
+            upstream_socket.connect((host, dest_port))
+            client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            handle_upstream_tunnel(upstream_socket, client)
             
 
 def run_proxy_server(host = '127.0.0.1', port = 8888):
