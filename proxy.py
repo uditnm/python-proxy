@@ -1,6 +1,7 @@
 import socket
 from urllib.parse import urlsplit
 import threading
+import read_blocklist
 
 def make_upstream_call(host, port, data, client):
     try:
@@ -54,7 +55,7 @@ def data_loop(socket1, socket2):
     except Exception as e:
         print(f"Upstream error: {e}")
 
-def handle_client(client, addr):
+def handle_client(client, addr, blocklist):
     with client:
         print(f"Connection from client:{addr}")
     
@@ -76,6 +77,11 @@ def handle_client(client, addr):
                 host = host_addr[0]
                 print(f"host: {host}")
 
+                if host in blocklist:
+                    print(f"[BLOCKED] request blocked: {host}")
+                    client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                    return
+
                 dest_port = int(host_addr[1])
                 print(f"destination port: {dest_port}")
                 
@@ -89,6 +95,11 @@ def handle_client(client, addr):
 
                 host = parsed.hostname
                 print(f"host: {host}")
+
+                if host in blocklist:
+                    print(f"[BLOCKED] request blocked: {host}")
+                    client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                    return
 
                 dest_port = parsed.port
                 if dest_port is None:
@@ -110,6 +121,8 @@ def handle_client(client, addr):
 
 def run_proxy_server(host = '127.0.0.1', port = 8888):
     try:
+        blocklist = read_blocklist.load_blocklist()
+
         # Create a TCP socket
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             # bind socket to host and port
@@ -126,7 +139,7 @@ def run_proxy_server(host = '127.0.0.1', port = 8888):
             while True:
                 try:
                     client_socket, addr = server_socket.accept()
-                    thread = threading.Thread(target=handle_client, args=(client_socket, addr))
+                    thread = threading.Thread(target=handle_client, args=(client_socket, addr, blocklist))
                     thread.daemon = True
                     thread.start()
 
